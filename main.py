@@ -1,40 +1,61 @@
-from fastapi import FastAPI, WebSocket
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from pathlib import Path
+from flask import Flask, render_template, request, redirect
+import sqlite3
 
-app = FastAPI()
+app = Flask(__name__)
 
-# 静的ファイル（CSS, JS）を提供
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# SQLiteデータベースのセットアップ
+DATABASE = 'text_data.db'
 
-# 最新のメッセージを保存
-latest_message = ""
+def get_db():
+    conn = sqlite3.connect(DATABASE)
+    return conn
 
-# クライアントとのWebSocket接続を管理
-connections = set()
+def init_db():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS texts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL
+    )
+    ''')
+    conn.commit()
+    conn.close()
 
-@app.get("/", response_class=HTMLResponse)
-async def read_root():
-    """HTMLを返す"""
-    html_path = Path("templates/index.html").read_text()
-    return HTMLResponse(content=html_path)
+# テキストを保存する関数
+def save_text(content):
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('INSERT INTO texts (content) VALUES (?)', (content,))
+    conn.commit()
+    conn.close()
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket接続を管理"""
-    global latest_message
-    await websocket.accept()
-    connections.add(websocket)
+# 最後のテキストを取得する関数
+def load_text():
+    conn = get_db()
+    c = conn.cursor()
+    c.execute('SELECT content FROM texts ORDER BY id DESC LIMIT 1')
+    result = c.fetchone()
+    conn.close()
+    return result[0] if result else "No data available"
 
-    # クライアント接続時に最新のメッセージを送信
-    await websocket.send_text(latest_message)
+# サーバー起動時にDB初期化
+init_db()
 
-    try:
-        while True:
-            data = await websocket.receive_text()
-            latest_message = data  # 最新のメッセージを更新
-            for conn in connections:
-                await conn.send_text(latest_message)  # 全クライアントに送信
-    except:
-        connections.remove(websocket)
+# ホームページのルート
+@app.route('/')
+def index():
+    # 最新のテキストを取得して表示
+    latest_text = load_text()
+    return render_template('index.html', latest_text=latest_text)
+
+# テキストを送信するためのルート
+@app.route('/submit', methods=['POST'])
+def submit():
+    # フォームから送信されたテキストを取得
+    text_content = request.form['text_content']
+    save_text(text_content)
+    return redirect('/')
+
+if __name__ == '__main__':
+    app.run(debug=True)
